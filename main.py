@@ -1,61 +1,77 @@
-from gpiozero import Motor, PWMOutputDevice
-from pynput.keyboard import Key, Listener
+import pygame
+from pigpio
 import time
 
-# Motor setup
-left_motor = PWMOutputDevice(pin=19, frequency=50)   # ESC_GPIO_PIN_LEFT
-right_motor = PWMOutputDevice(pin=5, frequency=50)   # ESC_GPIO_PIN_RIGHT
-roller_motor = PWMOutputDevice(pin=24, frequency=50) # ESC_GPIO_PIN_ROLLER
+# Initialize Pygame and Joystick
+pygame.init()
+pygame.joystick.init()
+joystick_count = pygame.joystick.get_count()
+if joystick_count == 0:
+    raise IOError("No joystick detected")
+joystick = pygame.joystick.Joystick(0)
+joystick.init()
 
-center_pulse = 1485 / 1000  # Convert to milliseconds
-pulse_diff = 50 / 1000      # Convert to milliseconds
-max_pulse = 2               # Maximum pulse duration in milliseconds
-min_pulse = 1               # Minimum pulse duration in milliseconds
+# Pin setup
+ESC_GPIO_PIN_ROLLER = 24  # Change to a hardware PWM pin
+ESC_GPIO_PIN_LEFT = 19    # Change to a hardware PWM pin
+ESC_GPIO_PIN_RIGHT = 5   # Change to a hardware PWM pin
+VIRTUAL_GND_PIN = 13       # Pin for virtual GND
 
-def set_motor_speed(motor, speed):
-    # Convert speed (-1 to 1) to pulse duration
-    pulse_duration = center_pulse + (speed * pulse_diff)
-    # Ensure pulse is within the valid range
-    pulse_duration = max(min_pulse, min(max_pulse, pulse_duration))
-    # Set motor speed
-    motor.value = pulse_duration / 20  # Convert to duty cycle (20ms period)
+# Function to set the duty cycle for the ESC
+def set_esc_speed(gpio_pin, pulse_width_us):
+    pi.set_servo_pulsewidth(gpio_pin, pulse_width_us)
 
-def stop_motors():
-    left_motor.value = 0.05 / 20 #center_pulse / 20
-    right_motor.value = 0.05 / 20 #center_pulse / 20
+def update_motors(left_speed, right_speed):
+    set_esc_speed(ESC_GPIO_PIN_LEFT, left_speed)
+    set_esc_speed(ESC_GPIO_PIN_RIGHT, right_speed)
+    time.sleep(0.02)
 
-def on_press(key):
-    if key == Key.up:
-        set_motor_speed(left_motor, 1)
-        set_motor_speed(right_motor, 1)
-        print('Up')
-    elif key == Key.down:
-        set_motor_speed(left_motor, -1)
-        set_motor_speed(right_motor, -1)
-        print('down')
-    elif key == Key.left:
-        set_motor_speed(left_motor, -1)
-        set_motor_speed(right_motor, 1)
-        print('left')
-    elif key == Key.right:
-        set_motor_speed(left_motor, 1)
-        set_motor_speed(right_motor, -1)
-        print('right')
-    elif key == Key.space:  # Use space key to start/stop the roller motor
-        roller_motor.value = center_pulse / 20# Forward        
+# Initialize pigpio
+pi = pigpio.pi(port=8880)
 
-def on_release(key):
-    if key in [Key.up, Key.down, Key.left, Key.right]:
-        stop_motors()
-    elif key == Key.space:
-        roller_motor.value =  0.05 / 20  # Stop roller motor
-    if key == Key.esc:
-        stop_motors()
-        return False
+# Set the virtual ground pin to LOW
+pi.set_mode(VIRTUAL_GND_PIN, pigpio.OUTPUT)
+pi.write(VIRTUAL_GND_PIN, 0)
+center = 1485
+diff = 50
 
-# Listen for keyboard events
-with Listener(on_press=on_press, on_release=on_release) as listener:
-    listener.join()
+# Set the PWM - arming
+set_esc_speed(ESC_GPIO_PIN_ROLLER, 1000)  # 1.0ms pulse
+set_esc_speed(ESC_GPIO_PIN_LEFT, 1500)    # 1.5ms pulse
+set_esc_speed(ESC_GPIO_PIN_RIGHT, 1500)   # 1.5ms pulse
+print("Arming!")
+time.sleep(2)
 
+try:
+    running = True
+    while running:
+        pygame.event.pump()  # Process event queue
 
+        # Assuming axis 0 for forward/backward, axis 1 for left/right
+        forward_backward = -joystick.get_axis(0)  # Invert if needed
+        left_right = joystick.get_axis(1)
 
+        left_speed = forward_backward + left_right
+        right_speed = forward_backward - left_right
+
+        # Limit speed values to range -1 to 1
+        left_speed = center + max(-1, min(1, left_speed))*diff
+        right_speed = center + max(-1, min(1, right_speed))*diff
+
+        update_motors(left_speed, right_speed)
+
+        # Add your roller motor control here (e.g., based on a joystick button)
+
+        time.sleep(0.1)  # Adjust as needed
+
+except KeyboardInterrupt:
+    pass
+
+finally:
+    # Ensure the motors are stopped when the script exits
+    # Stop the PWM for each pin
+    set_esc_speed(ESC_GPIO_PIN_ROLLER, 0)
+    set_esc_speed(ESC_GPIO_PIN_LEFT, 0)
+    set_esc_speed(ESC_GPIO_PIN_RIGHT, 0)
+    pi.stop()
+    pygame.quit()
